@@ -38,8 +38,9 @@ type PlayResponse struct {
 
 func main() {
 	var (
-		action = flag.String("action", "", "操作类型: list, play")
-		path   = flag.String("path", "", "路径")
+		action      = flag.String("action", "", "操作类型: list, play")
+		path        = flag.String("path", "", "路径")
+		cookiesPath = flag.String("cookies", "", "cookies文件路径 (可选)")
 	)
 	flag.Parse()
 
@@ -49,7 +50,7 @@ func main() {
 	}
 
 	// 确定cookies文件路径
-	cookiesFile := filepath.Join("..", "data", "115")
+	cookiesFile := getCookiesFilePath(*cookiesPath)
 
 	// 初始化115客户端
 	client, err := initClient(cookiesFile)
@@ -76,7 +77,54 @@ func main() {
 	}
 }
 
+// getCookiesFilePath 获取cookies文件路径，支持多种方式
+func getCookiesFilePath(userSpecified string) string {
+	// 1. 如果用户通过 --cookies 参数指定了路径，直接使用
+	if userSpecified != "" {
+		return userSpecified
+	}
 
+	// 2. 检查环境变量 COOKIES_FILE
+	if envPath := os.Getenv("COOKIES_FILE"); envPath != "" {
+		return envPath
+	}
+
+	// 3. 尝试多个可能的路径
+	possiblePaths := []string{
+		// 相对于当前目录
+		filepath.Join(".", "data", "115"),
+		// 相对于程序所在目录的上级
+		filepath.Join("..", "data", "115"),
+		// 相对于程序所在目录
+		filepath.Join(".", "115"),
+		// 用户配置目录（跨平台）
+		func() string {
+			if configDir, err := os.UserConfigDir(); err == nil {
+				return filepath.Join(configDir, "115driver", "cookies")
+			}
+			return ""
+		}(),
+		// 用户主目录
+		func() string {
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				return filepath.Join(homeDir, ".115driver", "cookies")
+			}
+			return ""
+		}(),
+	}
+
+	// 检查哪个路径的文件存在
+	for _, path := range possiblePaths {
+		if path != "" {
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
+		}
+	}
+
+	// 4. 如果都不存在，返回默认的相对路径
+	return filepath.Join("..", "data", "115")
+}
 
 func initClient(cookiesFile string) (*driver.Pan115Client, error) {
 	// 检查cookies文件是否存在
