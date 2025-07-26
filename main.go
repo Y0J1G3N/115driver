@@ -49,12 +49,7 @@ func main() {
 	}
 
 	// 确定cookies文件路径
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		outputError("获取用户目录失败: " + err.Error())
-		return
-	}
-	cookiesFile := filepath.Join(homeDir, ".config", "mpv", "data", "115")
+	cookiesFile := filepath.Join("..", "data", "115")
 
 	// 初始化115客户端
 	client, err := initClient(cookiesFile)
