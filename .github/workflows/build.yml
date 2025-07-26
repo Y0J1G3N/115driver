@@ -32,26 +32,8 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.20'
-
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-${{ matrix.goos }}-${{ matrix.goarch }}-go-
-          ${{ runner.os }}-go-
-
-    - name: Clean Go module cache if needed
-      run: |
-        if [ -d ~/go/pkg/mod ]; then
-          chmod -R +w ~/go/pkg/mod || true
-          go clean -modcache || true
-        fi
-      continue-on-error: true
+        go-version: '1.21'
+        cache: false
 
     - name: Download dependencies
       run: go mod download
