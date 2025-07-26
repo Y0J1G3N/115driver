@@ -40,6 +40,7 @@ func main() {
 	var (
 		action = flag.String("action", "", "操作类型: list, play")
 		path   = flag.String("path", "", "路径")
+		sort   = flag.String("sort", "", "排序方式: name, time, size, type (默认按时间)")
 	)
 	flag.Parse()
 
@@ -65,7 +66,7 @@ func main() {
 		if *path == "" {
 			*path = "/"
 		}
-		handleList(client, *path)
+		handleList(client, *path, *sort)
 	case "play":
 		if *path == "" {
 			outputError("play操作需要提供--path参数")
@@ -108,7 +109,7 @@ func initClient(cookiesFile string) (*driver.Pan115Client, error) {
 	return client, nil
 }
 
-func handleList(client *driver.Pan115Client, path string) {
+func handleList(client *driver.Pan115Client, path string, sortBy string) {
 	// 解析路径为CID
 	cid, err := resolvePath(client, path)
 	if err != nil {
@@ -116,8 +117,8 @@ func handleList(client *driver.Pan115Client, path string) {
 		return
 	}
 
-	// 获取文件列表
-	files, err := client.ListWithLimit(cid, 1000)
+	// 获取文件列表 - 支持自定义排序
+	files, err := getFilesSorted(client, cid, 1000, sortBy)
 	if err != nil {
 		outputError("获取文件列表失败: " + err.Error())
 		return
@@ -297,4 +298,53 @@ func handlePlay(client *driver.Pan115Client, filePath string) {
 	}
 
 	outputJSON(response)
+}
+
+// getSortOrder 根据排序参数返回对应的排序常量
+func getSortOrder(sortBy string) string {
+	switch sortBy {
+	case "name":
+		return driver.FileOrderByName
+	case "time":
+		return driver.FileOrderByTime
+	case "size":
+		return driver.FileOrderBySize
+	case "type":
+		return driver.FileOrderByType
+	default:
+		return driver.FileOrderByTime // 默认按时间排序
+	}
+}
+
+// 注意：driver.WithAsc 函数有bug，但 DefaultGetFileOptions 默认就是升序 (asc: "1")
+// 所以我们不需要额外设置 asc 字段
+
+// getFilesSorted 获取排序后的文件列表
+func getFilesSorted(client *driver.Pan115Client, dirID string, limit int64, sortBy string) (*[]driver.File, error) {
+	// 如果没有指定排序，使用默认的 ListWithLimit
+	if sortBy == "" {
+		return client.ListWithLimit(dirID, limit)
+	}
+
+	// 使用自定义排序
+	req := client.NewRequest().ForceContentType("application/json;charset=UTF-8")
+	getFilesOpts := []driver.GetFileOptions{
+		driver.WithApiURL(driver.ApiFileList),
+		driver.WithLimit(limit),
+		driver.WithOffset(0),
+		driver.WithOrder(getSortOrder(sortBy)),
+		// 默认就是升序，不需要额外设置
+	}
+
+	result, err := driver.GetFiles(req, dirID, getFilesOpts...)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []driver.File
+	for _, fileInfo := range result.Files {
+		files = append(files, *(&driver.File{}).From(&fileInfo))
+	}
+
+	return &files, nil
 }
