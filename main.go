@@ -48,12 +48,17 @@ func main() {
 		return
 	}
 
-	// 确定cookies文件路径
-	cookiesFile, err := filepath.Abs(filepath.Join("..", "data", "115"))
+	// 确定cookies文件路径 - 相对于程序文件位置
+	execPath, err := os.Executable()
 	if err != nil {
-		outputError("获取cookies文件绝对路径失败: " + err.Error())
+		outputError("获取程序路径失败: " + err.Error())
 		return
 	}
+
+	// 获取程序所在目录的上级目录
+	execDir := filepath.Dir(execPath)
+	parentDir := filepath.Dir(execDir)
+	cookiesFile := filepath.Join(parentDir, "data", "115")
 
 	// 初始化115客户端
 	client, err := initClient(cookiesFile)
