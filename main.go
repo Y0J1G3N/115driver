@@ -40,7 +40,6 @@ func main() {
 	var (
 		action = flag.String("action", "", "操作类型: list, play")
 		path   = flag.String("path", "", "路径")
-		sort   = flag.String("sort", "", "排序方式: name, time, size, type (默认按时间)")
 	)
 	flag.Parse()
 
@@ -66,7 +65,7 @@ func main() {
 		if *path == "" {
 			*path = "/"
 		}
-		handleList(client, *path, *sort)
+		handleList(client, *path)
 	case "play":
 		if *path == "" {
 			outputError("play操作需要提供--path参数")
@@ -109,7 +108,7 @@ func initClient(cookiesFile string) (*driver.Pan115Client, error) {
 	return client, nil
 }
 
-func handleList(client *driver.Pan115Client, path string, sortBy string) {
+func handleList(client *driver.Pan115Client, path string) {
 	// 解析路径为CID
 	cid, err := resolvePath(client, path)
 	if err != nil {
@@ -117,8 +116,8 @@ func handleList(client *driver.Pan115Client, path string, sortBy string) {
 		return
 	}
 
-	// 获取文件列表 - 支持自定义排序
-	files, err := getFilesSorted(client, cid, 1000, sortBy)
+	// 获取文件列表 - 按名称排序
+	files, err := getFilesSortedByName(client, cid, 1000)
 	if err != nil {
 		outputError("获取文件列表失败: " + err.Error())
 		return
@@ -177,20 +176,20 @@ func outputJSON(data interface{}) {
 
 
 
-// 解析友好路径为CID
-func resolvePath(client *driver.Pan115Client, friendlyPath string) (string, error) {
+// 解析路径为CID
+func resolvePath(client *driver.Pan115Client, path string) (string, error) {
 	// 移除开头的斜杠
-	if strings.HasPrefix(friendlyPath, "/") {
-		friendlyPath = friendlyPath[1:]
+	if strings.HasPrefix(path, "/") {
+		path = path[1:]
 	}
 
 	// 如果是空路径，返回根目录
-	if friendlyPath == "" {
+	if path == "" {
 		return "0", nil
 	}
 
 	// 分割路径
-	parts := strings.Split(friendlyPath, "/")
+	parts := strings.Split(path, "/")
 	currentCid := "0"
 
 	// 逐级查找
@@ -254,7 +253,7 @@ func handlePlay(client *driver.Pan115Client, filePath string) {
 	}
 
 	// 获取目录中的文件列表
-	files, err := client.ListWithLimit(dirCid, 10000)
+	files, err := client.ListWithLimit(dirCid, 1000)
 	if err != nil {
 		outputError("获取目录内容失败: " + err.Error())
 		return
@@ -300,44 +299,34 @@ func handlePlay(client *driver.Pan115Client, filePath string) {
 	outputJSON(response)
 }
 
-// getSortOrder 根据排序参数返回对应的排序常量
-func getSortOrder(sortBy string) string {
-	switch sortBy {
-	case "name":
-		return driver.FileOrderByName
-	case "time":
-		return driver.FileOrderByTime
-	case "size":
-		return driver.FileOrderBySize
-	case "type":
-		return driver.FileOrderByType
-	default:
-		return driver.FileOrderByTime // 默认按时间排序
-	}
-}
-
-// 注意：driver.WithAsc 函数有bug，但 DefaultGetFileOptions 默认就是升序 (asc: "1")
-// 所以我们不需要额外设置 asc 字段
-
-// getFilesSorted 获取排序后的文件列表
-func getFilesSorted(client *driver.Pan115Client, dirID string, limit int64, sortBy string) (*[]driver.File, error) {
-	// 如果没有指定排序，使用默认的 ListWithLimit
-	if sortBy == "" {
-		return client.ListWithLimit(dirID, limit)
+// getFilesSortedByName 按名称排序获取文件列表
+func getFilesSortedByName(client *driver.Pan115Client, dirID string, limit int64) (*[]driver.File, error) {
+	if dirID == "" {
+		dirID = "0"
 	}
 
-	// 使用自定义排序
+	// 使用115的natsort API按名称排序
 	req := client.NewRequest().ForceContentType("application/json;charset=UTF-8")
-	getFilesOpts := []driver.GetFileOptions{
-		driver.WithApiURL(driver.ApiFileList),
-		driver.WithLimit(limit),
-		driver.WithOffset(0),
-		driver.WithOrder(getSortOrder(sortBy)),
-		// 默认就是升序，不需要额外设置
+	params := map[string]string{
+		"aid":      "1",
+		"cid":      dirID,
+		"o":        driver.FileOrderByName,
+		"asc":      "1",
+		"offset":   "0",
+		"show_dir": "1",
+		"limit":    fmt.Sprintf("%d", limit),
+		"snap":     "0",
+		"natsort":  "1", // 启用自然排序
+		"record_open_time": "1",
+		"format":   "json",
+		"fc_mix":   "0",
 	}
 
-	result, err := driver.GetFiles(req, dirID, getFilesOpts...)
-	if err != nil {
+	var result driver.FileListResp
+	req = req.SetQueryParams(params).SetResult(&result)
+
+	resp, err := req.Get(driver.ApiFileListByName)
+	if err = driver.CheckErr(err, &result, resp); err != nil {
 		return nil, err
 	}
 
