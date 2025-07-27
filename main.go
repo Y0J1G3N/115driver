@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 	"github.com/SheltonZhu/115driver/pkg/driver"
 )
 
@@ -109,11 +108,17 @@ func initClient(cookiesFile string) (*driver.Pan115Client, error) {
 }
 
 func handleList(client *driver.Pan115Client, path string) {
-	// 解析路径为CID
-	cid, err := resolvePath(client, path)
-	if err != nil {
-		outputError("解析路径失败: " + err.Error())
-		return
+	// 使用更高效的DirName2CID方法解析路径
+	var cid string
+	if path == "/" || path == "" {
+		cid = "0"
+	} else {
+		result, err := client.DirName2CID(path)
+		if err != nil {
+			outputError("解析路径失败: " + err.Error())
+			return
+		}
+		cid = string(result.CategoryID)
 	}
 
 	// 获取文件列表 - 按名称排序
@@ -176,55 +181,23 @@ func outputJSON(data interface{}) {
 
 
 
-// 解析路径为CID
+// 解析路径为CID - 使用高效的DirName2CID方法
 func resolvePath(client *driver.Pan115Client, path string) (string, error) {
-	// 移除开头的斜杠
-	if strings.HasPrefix(path, "/") {
-		path = path[1:]
-	}
-
-	// 如果是空路径，返回根目录
-	if path == "" {
+	// 如果是根路径，直接返回根目录CID
+	if path == "/" || path == "" {
 		return "0", nil
 	}
 
-	// 分割路径
-	parts := strings.Split(path, "/")
-	currentCid := "0"
-
-	// 逐级查找
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-
-		// 获取当前目录的内容
-		files, err := client.List(currentCid)
-		if err != nil {
-			return "", fmt.Errorf("获取目录内容失败: %v", err)
-		}
-
-		// 查找匹配的子目录
-		found := false
-		for _, file := range *files {
-			if file.IsDirectory && file.Name == part {
-				currentCid = file.FileID
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return "", fmt.Errorf("路径不存在: %s", part)
-		}
+	// 使用DirName2CID方法一次性解析整个路径
+	result, err := client.DirName2CID(path)
+	if err != nil {
+		return "", fmt.Errorf("解析路径失败: %v", err)
 	}
 
-	return currentCid, nil
+	return string(result.CategoryID), nil
 }
 
 func handlePlay(client *driver.Pan115Client, filePath string) {
-	// 解析文件路径，找到文件的pickcode
-
 	// 分离目录和文件名
 	lastSlash := strings.LastIndex(filePath, "/")
 	if lastSlash == -1 {
@@ -239,21 +212,21 @@ func handlePlay(client *driver.Pan115Client, filePath string) {
 		dirPath = "/"
 	}
 
-	// 获取目录内容，查找文件
+	// 【优化】使用DirName2CID替代resolvePath
 	var dirCid string
 	if dirPath == "/" {
 		dirCid = "0"
 	} else {
-		resolvedCid, err := resolvePath(client, dirPath)
+		result, err := client.DirName2CID(dirPath)
 		if err != nil {
 			outputError("解析目录路径失败: " + err.Error())
 			return
 		}
-		dirCid = resolvedCid
+		dirCid = string(result.CategoryID)
 	}
 
-	// 获取目录中的文件列表
-	files, err := client.ListWithLimit(dirCid, 1000)
+	// 【优化】使用排序版本保持一致性
+	files, err := getFilesSortedByName(client, dirCid, 1000)
 	if err != nil {
 		outputError("获取目录内容失败: " + err.Error())
 		return
