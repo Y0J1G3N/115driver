@@ -303,9 +303,9 @@ func getFilesSortedByName(client *driver.Pan115Client, dirID string, limit int64
 		return nil, err
 	}
 
-	var files []driver.File
-	for _, fileInfo := range result.Files {
-		files = append(files, *(&driver.File{}).From(&fileInfo))
+	files := make([]driver.File, len(result.Files))
+	for i, fileInfo := range result.Files {
+		files[i] = *(&driver.File{}).From(&fileInfo)
 	}
 
 	return &files, nil
