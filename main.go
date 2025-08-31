@@ -76,21 +76,25 @@ func main() {
 		if *path == "" {
 			*path = "/"
 		}
-		handleList(client, *path)
+		err = handleList(client, *path)
 	case "play":
 		if *path == "" {
 			outputError("play操作需要提供--path参数")
 			return
 		}
-		handlePlay(client, *path)
+		err = handlePlay(client, *path)
 	case "get-streams":
 		if *path == "" {
 			outputError("get-streams操作需要提供--path参数")
 			return
 		}
-		handleGetStreams(client, *path)
+		err = handleGetStreams(client, *path)
 	default:
 		outputError("未知操作: " + *action)
+	}
+
+	if err != nil {
+		outputError(err.Error())
 	}
 }
 
@@ -125,7 +129,7 @@ func initClient(cookiesFile string) (*driver.Pan115Client, error) {
 	return client, nil
 }
 
-func handleList(client *driver.Pan115Client, path string) {
+func handleList(client *driver.Pan115Client, path string) error {
 	// 使用更高效的DirName2CID方法解析路径
 	var cid string
 	if path == "/" || path == "" {
@@ -133,8 +137,7 @@ func handleList(client *driver.Pan115Client, path string) {
 	} else {
 		result, err := client.DirName2CID(path)
 		if err != nil {
-			outputError("解析路径失败: " + err.Error())
-			return
+			return fmt.Errorf("解析路径失败: %w", err)
 		}
 		cid = string(result.CategoryID)
 	}
@@ -142,8 +145,7 @@ func handleList(client *driver.Pan115Client, path string) {
 	// 获取文件列表 - 按名称排序
 	files, err := getFilesSortedByName(client, cid, 1000)
 	if err != nil {
-		outputError("获取文件列表失败: " + err.Error())
-		return
+		return fmt.Errorf("获取文件列表失败: %w", err)
 	}
 
 	// 转换为CLI格式
@@ -177,6 +179,7 @@ func handleList(client *driver.Pan115Client, path string) {
 	}
 
 	outputJSON(response)
+	return nil
 }
 
 
@@ -197,36 +200,16 @@ func outputJSON(data interface{}) {
 	encoder.Encode(data)
 }
 
-
-
-// 解析路径为CID - 使用高效的DirName2CID方法
-func resolvePath(client *driver.Pan115Client, path string) (string, error) {
-	// 如果是根路径，直接返回根目录CID
-	if path == "/" || path == "" {
-		return "0", nil
-	}
-
-	// 使用DirName2CID方法一次性解析整个路径
-	result, err := client.DirName2CID(path)
-	if err != nil {
-		return "", fmt.Errorf("解析路径失败: %v", err)
-	}
-
-	return string(result.CategoryID), nil
-}
-
-func handlePlay(client *driver.Pan115Client, filePath string) {
+func handlePlay(client *driver.Pan115Client, filePath string) error {
 	targetFile, _, err := resolveFilePickCode(client, filePath)
 	if err != nil {
-		outputError(err.Error())
-		return
+		return err
 	}
 
 	// 获取下载链接
 	downloadInfo, err := client.DownloadWithUA(targetFile.PickCode, DefaultUserAgent)
 	if err != nil {
-		outputError("获取下载链接失败: " + err.Error())
-		return
+		return fmt.Errorf("获取下载链接失败: %w", err)
 	}
 
 	// 构建响应
@@ -236,13 +219,13 @@ func handlePlay(client *driver.Pan115Client, filePath string) {
 	}
 
 	outputJSON(response)
+	return nil
 }
 
-func handleGetStreams(client *driver.Pan115Client, filePath string) {
+func handleGetStreams(client *driver.Pan115Client, filePath string) error {
 	targetFile, _, err := resolveFilePickCode(client, filePath)
 	if err != nil {
-		outputError(err.Error())
-		return
+		return err
 	}
 	pickCode := targetFile.PickCode
 
@@ -253,7 +236,7 @@ func handleGetStreams(client *driver.Pan115Client, filePath string) {
 	downloadInfo, err := client.DownloadWithUA(pickCode, userAgent)
 	if err == nil && downloadInfo.Url.Url != "" {
 		streams = append(streams, StreamInfo{
-			Quality: "Original",
+			Quality: "Source",
 			URL:     downloadInfo.Url.Url,
 			IsM3U8:  false,
 		})
@@ -291,16 +274,15 @@ func handleGetStreams(client *driver.Pan115Client, filePath string) {
 	}
 
 	if len(streams) == 0 {
-		outputError("未能获取任何播放链接")
-		return
+		return fmt.Errorf("未能获取任何播放链接")
 	}
 
 	// 3. 排序
 	sort.Slice(streams, func(i, j int) bool {
-		if streams[i].Quality == "Original" {
+		if streams[i].Quality == "Source" {
 			return true
 		}
-		if streams[j].Quality == "Original" {
+		if streams[j].Quality == "Source" {
 			return false
 		}
 		q_i, err_i := strconv.Atoi(strings.TrimSuffix(streams[i].Quality, "p"))
@@ -326,6 +308,7 @@ func handleGetStreams(client *driver.Pan115Client, filePath string) {
 		FilenameNoExt: filenameNoExt,
 	}
 	outputJSON(response)
+	return nil
 }
 
 // 提取 resolveFilePickCode 作为一个可复用的辅助函数
@@ -349,14 +332,14 @@ func resolveFilePickCode(client *driver.Pan115Client, filePath string) (*driver.
 	} else {
 		result, err := client.DirName2CID(dirPath)
 		if err != nil {
-			return nil, "", fmt.Errorf("解析目录路径失败: %s", err.Error())
+			return nil, "", fmt.Errorf("解析目录路径失败: %w", err)
 		}
 		dirCid = string(result.CategoryID)
 	}
 
 	files, err := getFilesSortedByName(client, dirCid, 1000)
 	if err != nil {
-		return nil, "", fmt.Errorf("获取目录内容失败: %s", err.Error())
+		return nil, "", fmt.Errorf("获取目录内容失败: %w", err)
 	}
 
 	var targetFile *driver.File
