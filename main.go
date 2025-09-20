@@ -6,14 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 	"github.com/SheltonZhu/115driver/pkg/driver"
 )
-
-const DefaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/5.37.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 
 // 文件列表响应
 type ListResponse struct {
@@ -30,26 +25,19 @@ type FileItem struct {
 	NameNoExt string `json:"name_no_ext,omitempty"`
 }
 
-// 播放流信息
-type StreamInfo struct {
-	Quality string `json:"quality"`
-	URL     string `json:"url"`
-	IsM3U8  bool   `json:"is_m3u8"`
-}
-
-// 多播放流响应
-type StreamsResponse struct {
-	Success       bool         `json:"success"`
-	Error         string       `json:"error,omitempty"`
-	Streams       []StreamInfo `json:"streams"`
-	UserAgent     string       `json:"user_agent"`
-	DirPath       string       `json:"dir_path,omitempty"`
-	FilenameNoExt string       `json:"filename_no_ext,omitempty"`
+// 播放响应
+type PlayResponse struct {
+	Success       bool   `json:"success"`
+	Error         string `json:"error,omitempty"`
+	URL           string `json:"url"`
+	UserAgent     string `json:"user_agent"`
+	DirPath       string `json:"dir_path,omitempty"`
+	FilenameNoExt string `json:"filename_no_ext,omitempty"`
 }
 
 func main() {
 	var (
-		action = flag.String("action", "", "操作类型: list, play, get-streams")
+		action = flag.String("action", "", "操作类型: list, play")
 		path   = flag.String("path", "", "路径")
 	)
 	flag.Parse()
@@ -76,25 +64,15 @@ func main() {
 		if *path == "" {
 			*path = "/"
 		}
-		err = handleList(client, *path)
+		handleList(client, *path)
 	case "play":
 		if *path == "" {
 			outputError("play操作需要提供--path参数")
 			return
 		}
-		err = handlePlay(client, *path)
-	case "get-streams":
-		if *path == "" {
-			outputError("get-streams操作需要提供--path参数")
-			return
-		}
-		err = handleGetStreams(client, *path)
+		handlePlay(client, *path)
 	default:
 		outputError("未知操作: " + *action)
-	}
-
-	if err != nil {
-		outputError(err.Error())
 	}
 }
 
@@ -129,7 +107,7 @@ func initClient(cookiesFile string) (*driver.Pan115Client, error) {
 	return client, nil
 }
 
-func handleList(client *driver.Pan115Client, path string) error {
+func handleList(client *driver.Pan115Client, path string) {
 	// 使用更高效的DirName2CID方法解析路径
 	var cid string
 	if path == "/" || path == "" {
@@ -137,7 +115,8 @@ func handleList(client *driver.Pan115Client, path string) error {
 	} else {
 		result, err := client.DirName2CID(path)
 		if err != nil {
-			return fmt.Errorf("解析路径失败: %w", err)
+			outputError("解析路径失败: " + err.Error())
+			return
 		}
 		cid = string(result.CategoryID)
 	}
@@ -145,7 +124,8 @@ func handleList(client *driver.Pan115Client, path string) error {
 	// 获取文件列表 - 按名称排序
 	files, err := getFilesSortedByName(client, cid, 1000)
 	if err != nil {
-		return fmt.Errorf("获取文件列表失败: %w", err)
+		outputError("获取文件列表失败: " + err.Error())
+		return
 	}
 
 	// 转换为CLI格式
@@ -179,7 +159,6 @@ func handleList(client *driver.Pan115Client, path string) error {
 	}
 
 	outputJSON(response)
-	return nil
 }
 
 
@@ -200,123 +179,30 @@ func outputJSON(data interface{}) {
 	encoder.Encode(data)
 }
 
-func handlePlay(client *driver.Pan115Client, filePath string) error {
-	targetFile, _, err := resolveFilePickCode(client, filePath)
+
+
+// 解析路径为CID - 使用高效的DirName2CID方法
+func resolvePath(client *driver.Pan115Client, path string) (string, error) {
+	// 如果是根路径，直接返回根目录CID
+	if path == "/" || path == "" {
+		return "0", nil
+	}
+
+	// 使用DirName2CID方法一次性解析整个路径
+	result, err := client.DirName2CID(path)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("解析路径失败: %v", err)
 	}
 
-	// 获取下载链接
-	downloadInfo, err := client.DownloadWithUA(targetFile.PickCode, DefaultUserAgent)
-	if err != nil {
-		return fmt.Errorf("获取下载链接失败: %w", err)
-	}
-
-	// 构建响应
-	response := map[string]interface{}{
-		"success": true,
-		"url":     downloadInfo.Url.Url,
-	}
-
-	outputJSON(response)
-	return nil
+	return string(result.CategoryID), nil
 }
 
-func handleGetStreams(client *driver.Pan115Client, filePath string) error {
-	targetFile, _, err := resolveFilePickCode(client, filePath)
-	if err != nil {
-		return err
-	}
-	pickCode := targetFile.PickCode
-
-	streams := make([]StreamInfo, 0)
-	userAgent := DefaultUserAgent
-
-	// 1. 获取原始文件URL
-	downloadInfo, err := client.DownloadWithUA(pickCode, userAgent)
-	if err == nil && downloadInfo.Url.Url != "" {
-		streams = append(streams, StreamInfo{
-			Quality: "Source",
-			URL:     downloadInfo.Url.Url,
-			IsM3U8:  false,
-		})
-	}
-
-	// 2. 获取M3U8流
-	m3u8Url := fmt.Sprintf("https://115.com/api/video/m3u8/%s.m3u8", pickCode)
-	req := client.NewRequest().SetHeader("User-Agent", userAgent)
-	resp, err := req.Get(m3u8Url)
-	if err == nil {
-		body := resp.String()
-		if strings.HasPrefix(body, "#EXTM3U") {
-			lines := strings.Split(body, "\n")
-			for i, line := range lines {
-				if strings.HasPrefix(line, "#EXT-X-STREAM-INF") {
-					if i+1 < len(lines) {
-						streamURL := strings.TrimSpace(lines[i+1])
-						if strings.HasPrefix(streamURL, "http") {
-							quality := "Unknown"
-							re := regexp.MustCompile(`RESOLUTION=\d+x(\d+)`)
-							matches := re.FindStringSubmatch(line)
-							if len(matches) > 1 {
-								quality = matches[1] + "p"
-							}
-							streams = append(streams, StreamInfo{
-								Quality: quality,
-								URL:     streamURL,
-								IsM3U8:  true,
-							})
-						}
-					}
-				}
-			}
-		}
-	}
-
-	if len(streams) == 0 {
-		return fmt.Errorf("未能获取任何播放链接")
-	}
-
-	// 3. 排序
-	sort.Slice(streams, func(i, j int) bool {
-		if streams[i].Quality == "Source" {
-			return true
-		}
-		if streams[j].Quality == "Source" {
-			return false
-		}
-		q_i, err_i := strconv.Atoi(strings.TrimSuffix(streams[i].Quality, "p"))
-		q_j, err_j := strconv.Atoi(strings.TrimSuffix(streams[j].Quality, "p"))
-		if err_i != nil || err_j != nil {
-			return false // or some other default behavior
-		}
-		return q_i > q_j
-	})
-
-	// 提取文件名（不带扩展名）
-	fileName := filepath.Base(filePath)
-	filenameNoExt := fileName
-	if lastDot := strings.LastIndex(fileName, "."); lastDot != -1 {
-		filenameNoExt = fileName[:lastDot]
-	}
-
-	response := StreamsResponse{
-		Success:       true,
-		Streams:       streams,
-		UserAgent:     userAgent,
-		DirPath:       filepath.Dir(filePath),
-		FilenameNoExt: filenameNoExt,
-	}
-	outputJSON(response)
-	return nil
-}
-
-// 提取 resolveFilePickCode 作为一个可复用的辅助函数
-func resolveFilePickCode(client *driver.Pan115Client, filePath string) (*driver.File, string, error) {
+func handlePlay(client *driver.Pan115Client, filePath string) {
 	// 分离目录和文件名
 	lastSlash := strings.LastIndex(filePath, "/")
 	if lastSlash == -1 {
-		return nil, "", fmt.Errorf("无效的文件路径")
+		outputError("无效的文件路径")
+		return
 	}
 
 	dirPath := filePath[:lastSlash]
@@ -326,25 +212,29 @@ func resolveFilePickCode(client *driver.Pan115Client, filePath string) (*driver.
 		dirPath = "/"
 	}
 
+	// 【优化】使用DirName2CID替代resolvePath
 	var dirCid string
 	if dirPath == "/" {
 		dirCid = "0"
 	} else {
 		result, err := client.DirName2CID(dirPath)
 		if err != nil {
-			return nil, "", fmt.Errorf("解析目录路径失败: %w", err)
+			outputError("解析目录路径失败: " + err.Error())
+			return
 		}
 		dirCid = string(result.CategoryID)
 	}
 
+	// 【优化】使用排序版本保持一致性
 	files, err := getFilesSortedByName(client, dirCid, 1000)
 	if err != nil {
-		return nil, "", fmt.Errorf("获取目录内容失败: %w", err)
+		outputError("获取目录内容失败: " + err.Error())
+		return
 	}
 
+	// 查找指定文件
 	var targetFile *driver.File
-	for i := range *files {
-		file := (*files)[i]
+	for _, file := range *files {
 		if !file.IsDirectory && file.Name == fileName {
 			targetFile = &file
 			break
@@ -352,12 +242,35 @@ func resolveFilePickCode(client *driver.Pan115Client, filePath string) (*driver.
 	}
 
 	if targetFile == nil {
-		return nil, "", fmt.Errorf("文件不存在: %s", fileName)
+		outputError("文件不存在: " + fileName)
+		return
 	}
 
-	return targetFile, targetFile.PickCode, nil
-}
+	// 获取下载链接
+	userAgent := "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+	downloadInfo, err := client.DownloadWithUA(targetFile.PickCode, userAgent)
+	if err != nil {
+		outputError("获取下载链接失败: " + err.Error())
+		return
+	}
 
+	// 提取文件名（不带扩展名）
+	filenameNoExt := fileName
+	if lastDot := strings.LastIndex(fileName, "."); lastDot != -1 {
+		filenameNoExt = fileName[:lastDot]
+	}
+
+	// 构建响应
+	response := PlayResponse{
+		Success:       true,
+		URL:           downloadInfo.Url.Url,
+		UserAgent:     userAgent,
+		DirPath:       dirPath,
+		FilenameNoExt: filenameNoExt,
+	}
+
+	outputJSON(response)
+}
 
 // getFilesSortedByName 按名称排序获取文件列表
 func getFilesSortedByName(client *driver.Pan115Client, dirID string, limit int64) (*[]driver.File, error) {
@@ -390,9 +303,9 @@ func getFilesSortedByName(client *driver.Pan115Client, dirID string, limit int64
 		return nil, err
 	}
 
-	var files []driver.File
-	for _, fileInfo := range result.Files {
-		files = append(files, *(&driver.File{}).From(&fileInfo))
+	files := make([]driver.File, len(result.Files))
+	for i, fileInfo := range result.Files {
+		files[i] = *(&driver.File{}).From(&fileInfo)
 	}
 
 	return &files, nil
